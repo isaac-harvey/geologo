@@ -1,0 +1,52 @@
+:root {
+  --panel: #0f1319;
+  --panel-2: #151a22;
+  --ink: #e5e7eb;
+  --muted: #9ca3af;
+  --accent: #36a2ff;
+}
+* { box-sizing: border-box; }
+button {
+  background: var(--panel-2);
+  color: var(--ink);
+  border: 1px solid #222a36;
+  padding: 8px 10px;
+  border-radius: 10px;
+  cursor: pointer;
+}
+button.active {
+  outline: 2px solid var(--accent);
+}
+.toolbar {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  flex-wrap: wrap;
+}
+.toolbar .group {
+  display: flex;
+  gap: 6px;
+  padding: 6px;
+  background: var(--panel);
+  border: 1px solid #1b2230;
+  border-radius: 12px;
+}
+input.hex {
+  background: #0b0f15;
+  color: var(--ink);
+  border: 1px solid #1b2230;
+  padding: 8px;
+  border-radius: 8px;
+  width: 110px;
+}
+.status {
+  font-size: 12px;
+  color: var(--muted);
+}
+.canvas-wrap {
+  position: relative;
+  overflow: hidden;
+  border: 1px solid #1b2230;
+  border-radius: 12px;
+  background: #0a0c10;
+}
