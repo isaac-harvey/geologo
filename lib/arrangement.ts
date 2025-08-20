@@ -161,6 +161,13 @@ function arrivalAngle(e: HalfEdge, A: Arrangement): number {
 export function traceFaces(A: Arrangement): number[][] {
   const visited = new Array(A.edges.length).fill(false);
   const loops: number[][] = [];
+  const TAU = Math.PI * 2;
+
+  const norm = (a:number) => {
+    let t = a % TAU;
+    if (t < 0) t += TAU;
+    return t;
+  };
 
   for (let start = 0; start < A.edges.length; start++) {
     if (visited[start]) continue;
@@ -170,30 +177,43 @@ export function traceFaces(A: Arrangement): number[][] {
     let guard = 0;
 
     while (guard++ < 10000) {
-      if (visited[curr]) { loop.length = 0; break; }
+      if (visited[curr]) {        // encountered an already-claimed half-edge → not a new face
+        loop.length = 0;
+        break;
+      }
       visited[curr] = true;
       loop.push(curr);
 
       const e = A.edges[curr];
       const v = e.to;
-      const inAng = arrivalAngle(e, A);
+
+      // *** Key fix: base angle is the angle of the TWIN at v (i.e., incoming reversed by π) ***
+      const inAng = arrivalAngle(e, A);         // tangent pointing INTO v along e
+      const base  = norm(inAng + Math.PI);      // direction pointing OUT of v along twin(e)
 
       const outs = A.nodes[v].out;
       if (!outs.length) { loop.length = 0; break; }
 
-      // take smallest positive CCW turn from incoming angle
+      // choose the outgoing edge with the smallest positive CCW turn from 'base'
       let best = -1, bestDelta = Infinity;
       for (const oe of outs) {
-        const ang = A.edges[oe].tangentAngleAtFrom;
-        const d = angleDeltaCCW(inAng, ang);
-        if (d > 1e-9 && d < bestDelta) { bestDelta = d; best = oe; }
+        const ang = A.edges[oe].tangentAngleAtFrom; // tangent at v, pointing out along candidate
+        let d = norm(ang - base);                   // CCW delta from base to candidate
+        if (d > 1e-9 && d < bestDelta) {            // strictly positive; ignore the twin itself (d≈0)
+          bestDelta = d;
+          best = oe;
+        }
       }
       if (best < 0) { loop.length = 0; break; }
 
       curr = best;
-      if (curr === start) { loops.push(loop.slice()); break; }
+      if (curr === start) {                         // closed a loop
+        loops.push(loop.slice());
+        break;
+      }
     }
   }
+
   return loops;
 }
 
