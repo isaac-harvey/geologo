@@ -17,9 +17,7 @@ type Pt = { x:number, y:number };
 type Line = { id:string, p1:Pt, p2:Pt };
 type Circle = { id:string, c:Pt, r:number };
 
-// user point kinds:
-// - 'derived': created by line/circle tools (auto-removed if no refs remain)
-// - 'explicit': created by Point tool (never auto-removed; only by Delete click)
+// user point kinds
 type UPoint = { id: string; p: Pt; kind: 'derived' | 'explicit'; refs: string[] };
 
 function uuid(){ return Math.random().toString(36).slice(2,10); }
@@ -77,13 +75,6 @@ export default function GeometryCanvas({
   // ---------- User point helpers ----------
   const EPS2_POS = 1e-10;
   const findUserPointIndexNear = (pt: Pt, pxTol = 6): number => {
-    // search in screen space for intuitive tolerance
-    let bestIdx = -1, bestD2 = (pxTol*pxTol);
-    for (let i=0;i<userPoints.length;i++){
-      const s = worldToScreen(userPoints[i].p);
-      const d2 = (s.x - (pt.x - offset.x)*scale)**2 + (s.y - (pt.y - offset.y)*scale)**2; // not used; keep consistent
-    }
-    // simpler: compute directly in world with scaled tolerance
     const tolWorld = pxTol/scale;
     for (let i=0;i<userPoints.length;i++){
       if (dist2(userPoints[i].p, pt) <= (tolWorld*tolWorld)) return i;
@@ -112,7 +103,6 @@ export default function GeometryCanvas({
       for(const p of pts){
         const idx = findUserPointIndexNear(p);
         if (idx >= 0) {
-          // point already exists → just add ref
           if (!next[idx].refs.includes(refId)) next[idx] = { ...next[idx], refs: [...next[idx].refs, refId] };
         } else {
           next.push({ id: uuid(), p: { ...p }, kind: 'derived', refs: [refId] });
@@ -129,9 +119,7 @@ export default function GeometryCanvas({
         const refs = up.refs.filter(r => r !== refId);
         if (up.kind === 'derived') {
           if (refs.length > 0) out.push({ ...up, refs });
-          // else drop it
         } else {
-          // explicit points never auto-delete
           out.push({ ...up, refs });
         }
       }
@@ -214,24 +202,21 @@ export default function GeometryCanvas({
     return ()=>window.removeEventListener('resize', handle);
   }, []);
 
-  // recompute intersections + combined vertices (user + intersections)
+  // recompute intersections + combined vertices
   useEffect(()=>{
     const ints: Pt[] = [];
-    // line-line
     for(let i=0;i<lines.length;i++){
       for(let j=i+1;j<lines.length;j++){
         const p = lineLine(lines[i].p1, lines[i].p2, lines[j].p1, lines[j].p2);
         if(p) ints.push(p);
       }
     }
-    // line-circle
     for(const L of lines){
       for(const C of circles){
         const ps = lineCircle(L.p1, L.p2, C.c, C.r);
         for(const p of ps) ints.push(p);
       }
     }
-    // circle-circle
     for(let i=0;i<circles.length;i++){
       for(let j=i+1;j<circles.length;j++){
         const ps = circleCircle(circles[i].c, circles[i].r, circles[j].c, circles[j].r);
@@ -239,14 +224,12 @@ export default function GeometryCanvas({
       }
     }
 
-    // dedupe intersections
     const uniqInts: Pt[] = [];
     const eps2 = 1e-8;
     for(const p of ints){
       if(!uniqInts.some(q=>dist2(p,q) < eps2)) uniqInts.push(p);
     }
 
-    // combined vertices: userPoints first (so snap prefers them), then add unique intersections
     const combined: Pt[] = userPoints.map(u=>u.p).slice();
     for(const p of uniqInts){
       if(!combined.some(q=>dist2(p,q) < eps2)) combined.push(p);
@@ -302,7 +285,6 @@ export default function GeometryCanvas({
       ctx.stroke();
     };
 
-    // analytic fills
     for(const path of paths){
       const poly = pathToPolyline(path, Math.PI/36);
       if(poly.length < 3) continue;
@@ -325,25 +307,25 @@ export default function GeometryCanvas({
     for(const L of lines) drawLineInf(L);
     for(const Ci of circles) drawCircle(Ci);
 
-    // Draw user points (distinct)
+    // user points: explicit (purple), derived (amber)
     for(const up of userPoints){
       const s = worldToScreen(up.p);
       ctx.beginPath();
       ctx.arc(s.x, s.y, 3, 0, Math.PI*2);
-      ctx.fillStyle = up.kind === 'explicit' ? '#d946ef' : '#f59e0b'; // explicit=purple, derived=amber
+      ctx.fillStyle = up.kind === 'explicit' ? '#d946ef' : '#f59e0b';
       ctx.fill();
       ctx.strokeStyle = '#0a2e44';
       ctx.lineWidth = 1;
       ctx.stroke();
     }
 
-    // Draw pure intersection points (exclude locations that coincide with any user point)
+    // pure intersections (cyan)
     const eps2 = 1e-8;
     for(const v of intersections){
       if (userPoints.some(u => dist2(u.p, v) < eps2)) continue;
       const s = worldToScreen(v);
       ctx.beginPath();
-      ctx.fillStyle = '#4fc3f7'; // cyan
+      ctx.fillStyle = '#4fc3f7';
       ctx.arc(s.x, s.y, 2.5, 0, Math.PI*2);
       ctx.fill();
       ctx.strokeStyle = '#0a2e44';
@@ -358,9 +340,9 @@ export default function GeometryCanvas({
       ctx.arc(s.x, s.y, 3, 0, Math.PI*2);
       ctx.fill();
     }
-  }, [lines, circles, paths, vertices, intersections, userPoints, offset, scale, pendingPt]);
+  }, [lines, circles, paths, intersections, userPoints, offset, scale, pendingPt]);
 
-  // snapping among combined vertices (user points & intersections)
+  // snapping among combined vertices
   const pickVertex = (sp:Pt):Pt|null => {
     let best:Pt|null = null, bestd = SNAP_PX*SNAP_PX;
     for(const v of vertices){
@@ -392,7 +374,6 @@ export default function GeometryCanvas({
   const onPointerDown = (e:React.PointerEvent<HTMLCanvasElement>) => {
     const rect = (e.currentTarget as HTMLCanvasElement).getBoundingClientRect();
     const sp = { x: e.clientX-rect.left, y: e.clientY-rect.top };
-
     (e.currentTarget as HTMLCanvasElement).setPointerCapture(e.pointerId);
     panStart.current = { x: sp.x, y: sp.y, o: { ...offset } };
     setIsPanning(false);
@@ -428,20 +409,19 @@ export default function GeometryCanvas({
     if (!isLeftClick) return;
     if (wasDrag) return;
 
-    // ----- Handle tools on LEFT CLICK RELEASE -----
+    // ----- Tools on LEFT CLICK RELEASE -----
     const snap = pickVertex(sp);
     const wp = snap ?? screenToWorld(sp);
 
     if(tool==='point'){
       pushHistory();
-      // If a user point exists here, upgrade to explicit; else create explicit
       setUserPoints(prev => {
         const idx = findUserPointIndexNear(wp);
         if (idx >= 0) {
           const up = prev[idx];
-          if (up.kind === 'explicit') return prev; // nothing to do
+          if (up.kind === 'explicit') return prev;
           const next = prev.slice();
-          next[idx] = { ...up, kind: 'explicit' }; // promote
+          next[idx] = { ...up, kind: 'explicit' };
           return next;
         }
         return [...prev, { id: uuid(), p: { ...wp }, kind: 'explicit', refs: [] }];
@@ -464,7 +444,7 @@ export default function GeometryCanvas({
           const candidate: Line = { id: newId, p1, p2 };
           const idx = prev.findIndex(L => sameInfiniteLine(L, candidate));
           if(idx !== -1){
-            newId = prev[idx].id; // keep id if replacing
+            newId = prev[idx].id;
             const next = prev.slice();
             next[idx] = { id: newId, p1, p2 };
             for(let j=next.length-1;j>=0;j--){
@@ -476,17 +456,10 @@ export default function GeometryCanvas({
           return [...prev, candidate];
         });
 
-        // Attach/insert derived points
-        // First endpoint
-        if (pendingWasSnap) addRefsIfUserPoint(p1, newId);
-        else addDerivedPoints([p1], newId);
+        if (pendingWasSnap) addRefsIfUserPoint(p1, newId); else addDerivedPoints([p1], newId);
+        const snappedIdx = findUserPointIndexNear(p2);
+        if (snappedIdx >= 0) addRefsIfUserPoint(p2, newId); else addDerivedPoints([p2], newId);
 
-        // Second endpoint
-        const snappedUserIdx = findUserPointIndexNear(p2);
-        if (snappedUserIdx >= 0) addRefsIfUserPoint(p2, newId);
-        else addDerivedPoints([p2], newId);
-
-        // Bisections along the line
         if(bisections > 0){
           const mids: Pt[] = [];
           for(let k=1; k<=bisections; k++){
@@ -516,16 +489,10 @@ export default function GeometryCanvas({
         const newId = uuid();
         setCircles(prev=>[...prev, { id: newId, c: c0, r }]);
 
-        // Centre
-        if (pendingWasSnap) addRefsIfUserPoint(c0, newId);
-        else addDerivedPoints([c0], newId);
-
-        // Radius point
+        if (pendingWasSnap) addRefsIfUserPoint(c0, newId); else addDerivedPoints([c0], newId);
         const secondSnapIdx = findUserPointIndexNear(wp);
-        if (secondSnapIdx >= 0) addRefsIfUserPoint(wp, newId);
-        else addDerivedPoints([wp], newId);
+        if (secondSnapIdx >= 0) addRefsIfUserPoint(wp, newId); else addDerivedPoints([wp], newId);
 
-        // Circumferential bisections
         if(bisections > 0){
           const theta0 = Math.atan2(wp.y - c0.y, wp.x - c0.x);
           const pts: Pt[] = [];
@@ -546,7 +513,6 @@ export default function GeometryCanvas({
     if(tool==='fill'){
       const worldPt = screenToWorld(sp);
 
-      // recolour existing fill if clicked inside
       for(let i=paths.length-1;i>=0;i--){
         const poly = pathToPolyline(paths[i]);
         if(pointInPolyline(worldPt, poly)){
@@ -561,7 +527,6 @@ export default function GeometryCanvas({
         }
       }
 
-      // otherwise create a new fill
       const A = buildArrangement(
         lines.map(l=>({ p1:l.p1, p2:l.p2 })),
         circles.map(c=>({ c:c.c, r:c.r })),
@@ -589,7 +554,7 @@ export default function GeometryCanvas({
     if(tool==='delete'){
       const wp = screenToWorld(sp);
 
-      // 1) Delete a user point if clicked close to it
+      // delete a user point if clicked near it
       const tolWorld = POINT_HIT_PX/scale;
       const ptIdx = userPoints.findIndex(u => dist2(u.p, wp) <= tolWorld*tolWorld);
       if (ptIdx >= 0) {
@@ -599,7 +564,7 @@ export default function GeometryCanvas({
         return;
       }
 
-      // 2) Delete fills
+      // delete fills
       for(let i=paths.length-1;i>=0;i--){
         const poly = pathToPolyline(paths[i]);
         if(pointInPolyline(wp, poly)){
@@ -610,10 +575,10 @@ export default function GeometryCanvas({
         }
       }
 
-      // 3) Delete circles (and prune derived points that referenced them)
+      // delete circles (and prune referenced derived points)
       for(let i=circles.length-1;i>=0;i--){
         const cs = worldToScreen(circles[i].c);
-        const d = pointToCircleRingPx({ x:e.clientX-rect.left, y:e.clientY-rect.top }, cs, circles[i].r*scale);
+        const d = pointToCircleRingPx(sp, cs, circles[i].r*scale);
         if(d <= HIT_PX){
           const removedId = circles[i].id;
           pushHistory();
@@ -624,11 +589,11 @@ export default function GeometryCanvas({
         }
       }
 
-      // 4) Delete lines (and prune derived points that referenced them)
+      // delete lines (and prune referenced derived points)
       for(let i=lines.length-1;i>=0;i--){
         const p1s = worldToScreen(lines[i].p1);
         const p2s = worldToScreen(lines[i].p2);
-        const d = pointToLineDistPx({ x:e.clientX-rect.left, y:e.clientY-rect.top }, p1s, p2s);
+        const d = pointToLineDistPx(sp, p1s, p2s);
         if(d <= HIT_PX){
           const removedId = lines[i].id;
           pushHistory();
@@ -676,8 +641,103 @@ export default function GeometryCanvas({
     return ()=> el.removeEventListener('wheel', handle);
   }, []);
 
-  // export / clear / undo
+  // ---------- SAVE / LOAD / EXPORT / CLEAR / UNDO ----------
   useEffect(()=>{
+    const saveJson = () => {
+      const data = {
+        version: 1,
+        view: { scale, offset: { ...offset } },
+        lines: lines.map(l=>({ id:l.id, p1:{...l.p1}, p2:{...l.p2} })),
+        circles: circles.map(c=>({ id:c.id, c:{...c.c}, r:c.r })),
+        paths: paths.map(ph=>({
+          start:{...ph.start},
+          segs: ph.segs.map(s => s.kind==='L'
+            ? { kind:'L', to:{...s.to} }
+            : { kind:'A', to:{...s.to}, r:s.r, largeArc:s.largeArc, sweep:s.sweep, c:{...s.c} }
+          ),
+          color: ph.color ?? null
+        })),
+        userPoints: userPoints.map(u=>({ id:u.id, p:{...u.p}, kind:u.kind, refs:[...u.refs] }))
+      };
+
+      const ts = (() => {
+        const d = new Date();
+        const pad = (n:number)=>String(n).padStart(2,'0');
+        return `${d.getFullYear()}${pad(d.getMonth()+1)}${pad(d.getDate())}_${pad(d.getHours())}${pad(d.getMinutes())}${pad(d.getSeconds())}`;
+      })();
+
+      const blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = `geologo_${ts}.json`;
+      a.click();
+      URL.revokeObjectURL(url);
+      setMessage(`Saved geologo_${ts}.json`);
+    };
+
+    const loadJson = (ev: any) => {
+      try {
+        const data = ev?.detail?.data;
+        if (!data || typeof data !== 'object') throw new Error('No data');
+
+        // light validation + coercion
+        const readPt = (o:any): Pt => ({ x: Number(o.x), y: Number(o.y) });
+        const safeLines: Line[] = Array.isArray(data.lines) ? data.lines.map((l:any)=>({
+          id: String(l.id ?? uuid()),
+          p1: readPt(l.p1 || {x:0,y:0}),
+          p2: readPt(l.p2 || {x:1,y:0}),
+        })) : [];
+
+        const safeCircles: Circle[] = Array.isArray(data.circles) ? data.circles.map((c:any)=>({
+          id: String(c.id ?? uuid()),
+          c: readPt(c.c || {x:0,y:0}),
+          r: Number(c.r ?? 1),
+        })) : [];
+
+        const safePaths: RegionPath[] = Array.isArray(data.paths) ? data.paths.map((p:any)=>{
+          const start = readPt(p.start || {x:0,y:0});
+          const segs = Array.isArray(p.segs) ? p.segs.map((s:any)=>{
+            if (s?.kind === 'L') return { kind:'L' as const, to: readPt(s.to) };
+            if (s?.kind === 'A') return {
+              kind:'A' as const,
+              to: readPt(s.to),
+              r: Number(s.r ?? 0),
+              largeArc: (s.largeArc?1:0) as 0|1,
+              sweep: (s.sweep?1:0) as 0|1,
+              c: readPt(s.c)
+            };
+            return null;
+          }).filter(Boolean) as RegionPath['segs'] : [];
+          const color = typeof p.color === 'string' ? p.color : undefined;
+          return { start, segs, color };
+        }) : [];
+
+        const safeUserPoints: UPoint[] = Array.isArray(data.userPoints) ? data.userPoints.map((u:any)=>({
+          id: String(u.id ?? uuid()),
+          p: readPt(u.p || {x:0,y:0}),
+          kind: (u.kind === 'explicit' ? 'explicit' : 'derived') as UPoint['kind'],
+          refs: Array.isArray(u.refs) ? u.refs.map((r:any)=>String(r)) : [],
+        })) : [];
+
+        const newScale = Number(data?.view?.scale ?? 1);
+        const newOffset = data?.view?.offset ? readPt(data.view.offset) : { x: -400, y: -300 };
+
+        pushHistory();
+        setLines(safeLines);
+        setCircles(safeCircles);
+        setPaths(safePaths);
+        setUserPoints(safeUserPoints);
+        setScale(isFinite(newScale) && newScale > 0 ? newScale : 1);
+        setOffset(newOffset);
+        setPendingPt(null);
+        setPendingWasSnap(false);
+        setMessage('State loaded');
+      } catch {
+        setMessage('Invalid JSON data');
+      }
+    };
+
     const onExport = ()=>{
       if(paths.length===0){ setMessage('Nothing to export'); return; }
 
@@ -724,15 +784,19 @@ ${body}</svg>`;
 
     const onUndo = ()=> undo();
 
+    document.addEventListener('SAVE_JSON', saveJson as any);
+    document.addEventListener('LOAD_JSON', loadJson as any);
     document.addEventListener('EXPORT_SVG', onExport as any);
     document.addEventListener('CLEAR_ALL', onClear as any);
     document.addEventListener('UNDO', onUndo as any);
     return ()=>{
+      document.removeEventListener('SAVE_JSON', saveJson as any);
+      document.removeEventListener('LOAD_JSON', loadJson as any);
       document.removeEventListener('EXPORT_SVG', onExport as any);
       document.removeEventListener('CLEAR_ALL', onClear as any);
       document.removeEventListener('UNDO', onUndo as any);
     };
-  }, [paths, lines, circles, userPoints]);
+  }, [scale, offset, lines, circles, paths, userPoints]);
 
   return (
     <div className="canvas-wrap">

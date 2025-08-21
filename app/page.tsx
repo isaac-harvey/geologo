@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import '@/styles/globals.css';
 import GeometryCanvas from '@/components/GeometryCanvas';
 
@@ -13,13 +13,41 @@ export default function Page() {
   const [message, setMessage] = useState<string>('Ready');
   const [bisections, setBisections] = useState<number>(0);
 
+  const fileRef = useRef<HTMLInputElement>(null);
+
   useEffect(() => {
     if (/^#([0-9a-fA-F]{6})$/.test(hex)) setColor(hex);
   }, [hex]);
 
+  const handleSave = () => {
+    document.dispatchEvent(new CustomEvent('SAVE_JSON'));
+  };
+
+  const handleLoad = () => {
+    fileRef.current?.click();
+  };
+
+  const handleFileChange: React.ChangeEventHandler<HTMLInputElement> = (e) => {
+    const f = e.target.files?.[0];
+    if (!f) return;
+    const reader = new FileReader();
+    reader.onload = () => {
+      try {
+        const data = JSON.parse(String(reader.result));
+        document.dispatchEvent(new CustomEvent('LOAD_JSON', { detail: { data } }));
+        setMessage(`Loaded ${f.name}`);
+      } catch {
+        setMessage('Invalid JSON file');
+      }
+    };
+    reader.readAsText(f);
+    // allow re-selecting the same file later
+    e.target.value = '';
+  };
+
   return (
     <div style={{ padding: 16, display: 'grid', gap: 12 }}>
-      <h1 style={{ margin: 0, fontWeight: 600, letterSpacing: 0.3 }}>GeoLogo</h1>
+      <h1 style={{ margin: 0, fontWeight: 600, letterSpacing: 0.3 }}>GeoLogo - Euclidean Construction Design Tools</h1>
 
       <div className="toolbar">
         <div className="group">
@@ -69,6 +97,8 @@ export default function Page() {
 
         <div className="group">
           <button onClick={() => document.dispatchEvent(new CustomEvent('EXPORT_SVG'))}>Export SVG</button>
+          <button onClick={handleSave}>Save</button>
+          <button onClick={handleLoad}>Load</button>
           <button onClick={() => document.dispatchEvent(new CustomEvent('UNDO'))}>Undo</button>
           <button onClick={() => document.dispatchEvent(new CustomEvent('CLEAR_ALL'))}>Clear All</button>
         </div>
@@ -81,6 +111,15 @@ export default function Page() {
         setMessage={setMessage}
         fillColor={color}
         bisections={bisections}
+      />
+
+      {/* Hidden file input for JSON load */}
+      <input
+        ref={fileRef}
+        type="file"
+        accept="application/json"
+        style={{ display: 'none' }}
+        onChange={handleFileChange}
       />
 
       <p className="status" style={{ margin: '4px 0' }}>
