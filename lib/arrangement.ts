@@ -29,7 +29,9 @@ export type Arrangement = { nodes: Node[]; edges: HalfEdge[] };
 export type PathSeg =
   | { kind: 'L'; to: Pt }
   | { kind: 'A'; to: Pt; r: number; largeArc: 0 | 1; sweep: 0 | 1; c: Pt };
-export type RegionPath = { start: Pt; segs: PathSeg[] };
+
+// NOTE: added optional 'color' so history/undo can preserve it.
+export type RegionPath = { start: Pt; segs: PathSeg[]; color?: string };
 
 const TAU = Math.PI * 2;
 
@@ -158,10 +160,10 @@ function arrivalAngle(e: HalfEdge, A: Arrangement): number {
   }
 }
 
+// FIXED: choose next edge from the TWIN's direction (incoming + π) → smallest positive CCW turn
 export function traceFaces(A: Arrangement): number[][] {
   const visited = new Array(A.edges.length).fill(false);
   const loops: number[][] = [];
-  const TAU = Math.PI * 2;
 
   const norm = (a:number) => {
     let t = a % TAU;
@@ -177,43 +179,31 @@ export function traceFaces(A: Arrangement): number[][] {
     let guard = 0;
 
     while (guard++ < 10000) {
-      if (visited[curr]) {        // encountered an already-claimed half-edge → not a new face
-        loop.length = 0;
-        break;
-      }
+      if (visited[curr]) { loop.length = 0; break; }
       visited[curr] = true;
       loop.push(curr);
 
       const e = A.edges[curr];
       const v = e.to;
 
-      // *** Key fix: base angle is the angle of the TWIN at v (i.e., incoming reversed by π) ***
-      const inAng = arrivalAngle(e, A);         // tangent pointing INTO v along e
-      const base  = norm(inAng + Math.PI);      // direction pointing OUT of v along twin(e)
+      const inAng = arrivalAngle(e, A);
+      const base  = norm(inAng + Math.PI); // twin direction out of v
 
       const outs = A.nodes[v].out;
       if (!outs.length) { loop.length = 0; break; }
 
-      // choose the outgoing edge with the smallest positive CCW turn from 'base'
       let best = -1, bestDelta = Infinity;
       for (const oe of outs) {
-        const ang = A.edges[oe].tangentAngleAtFrom; // tangent at v, pointing out along candidate
-        let d = norm(ang - base);                   // CCW delta from base to candidate
-        if (d > 1e-9 && d < bestDelta) {            // strictly positive; ignore the twin itself (d≈0)
-          bestDelta = d;
-          best = oe;
-        }
+        const ang = A.edges[oe].tangentAngleAtFrom;
+        const d = norm(ang - base);
+        if (d > 1e-9 && d < bestDelta) { bestDelta = d; best = oe; }
       }
       if (best < 0) { loop.length = 0; break; }
 
       curr = best;
-      if (curr === start) {                         // closed a loop
-        loops.push(loop.slice());
-        break;
-      }
+      if (curr === start) { loops.push(loop.slice()); break; }
     }
   }
-
   return loops;
 }
 
@@ -231,20 +221,21 @@ export function loopToPath(A: Arrangement, loop: number[]): RegionPath {
   return { start, segs };
 }
 
-// Canvas draw/hit-test helpers
+// ---------- Canvas draw / hit-test helpers ----------
+
 export function pathToPolyline(path: RegionPath, maxAngleStep = Math.PI / 24): Pt[] {
   const pts: Pt[] = [];
   let cursor = { ...path.start };
   pts.push({ ...cursor });
-  const angleAt = (p: Pt, c: Pt) => Math.atan2(p.y - c.y, p.x - c.x);
+  const angAt = (p: Pt, c: Pt) => Math.atan2(p.y - c.y, p.x - c.x);
   for (const s of path.segs) {
     if (s.kind === 'L') {
       cursor = { ...s.to };
       pts.push({ ...cursor });
     } else {
       const c = s.c, r = s.r, sweep = s.sweep;
-      const a0 = angleAt(cursor, c);
-      const a1 = angleAt(s.to, c);
+      const a0 = angAt(cursor, c);
+      const a1 = angAt(s.to, c);
       const dccw = ((a: number, b: number) => {
         let d = (b - a) % TAU; if (d < 0) d += TAU; return d;
       })(a0, a1);
@@ -274,13 +265,25 @@ export function polylineArea(poly: Pt[]): number {
   return 0.5 * a;
 }
 
+function pointNearSegment(p: Pt, a: Pt, b: Pt, eps = 1e-6): boolean {
+  const vx = b.x - a.x, vy = b.y - a.y;
+  const wx = p.x - a.x, wy = p.y - a.y;
+  const len2 = vx*vx + vy*vy || 1;
+  const t = Math.max(0, Math.min(1, (wx*vx + wy*vy)/len2));
+  const cx = a.x + t*vx, cy = a.y + t*vy;
+  return Math.hypot(p.x - cx, p.y - cy) <= eps;
+}
+
+// Boundary counts as inside (nicer UX)
 export function pointInPolyline(pt: Pt, poly: Pt[]): boolean {
+  for (let i=0, j=poly.length-1; i<poly.length; j=i++) {
+    if (pointNearSegment(pt, poly[j], poly[i])) return true;
+  }
   let inside = false;
-  for (let i = 0, j = poly.length - 1; i < poly.length; j = i++) {
-    const xi = poly[i].x, yi = poly[i].y;
-    const xj = poly[j].x, yj = poly[j].y;
-    const inter = ((yi > pt.y) !== (yj > pt.y)) &&
-      (pt.x < (xj - xi) * (pt.y - yi) / ((yj - yi) || 1e-12) + xi);
+  for (let i=0, j=poly.length-1; i<poly.length; j=i++) {
+    const xi=poly[i].x, yi=poly[i].y, xj=poly[j].x, yj=poly[j].y;
+    const inter = ((yi>pt.y)!==(yj>pt.y)) &&
+      (pt.x < (xj-xi)*(pt.y-yi)/((yj-yi)||1e-12) + xi);
     if (inter) inside = !inside;
   }
   return inside;

@@ -25,7 +25,7 @@ const HIT_PX = 8;
 type Snapshot = {
   lines: Line[];
   circles: Circle[];
-  paths: RegionPath[];
+  paths: RegionPath[];     // analytic fills
   userPoints: Pt[];
 };
 
@@ -41,15 +41,20 @@ export default function GeometryCanvas({
   setMessage: (m:string)=>void;
 }){
   const ref = useRef<HTMLCanvasElement|null>(null);
+
   const [scale, setScale] = useState(1);
   const [offset, setOffset] = useState<Pt>({ x: -400, y: -300 }); // world coords of top-left
+  const scaleRef = useRef(scale);
+  const offsetRef = useRef(offset);
+  useEffect(()=>{ scaleRef.current = scale; }, [scale]);
+  useEffect(()=>{ offsetRef.current = offset; }, [offset]);
 
   const [lines, setLines] = useState<Line[]>([]);
   const [circles, setCircles] = useState<Circle[]>([]);
-  const [paths, setPaths] = useState<RegionPath[]>([]);      // analytic fills
+  const [paths, setPaths] = useState<RegionPath[]>([]);
 
   const [vertices, setVertices] = useState<Pt[]>([]);
-  const [userPoints, setUserPoints] = useState<Pt[]>([]);    // retained arbitrary points
+  const [userPoints, setUserPoints] = useState<Pt[]>([]); // retained arbitrary points
   const [pendingPt, setPendingPt] = useState<Pt|null>(null);
   const [pendingWasSnap, setPendingWasSnap] = useState<boolean>(false);
   const [isPanning, setIsPanning] = useState(false);
@@ -64,10 +69,14 @@ export default function GeometryCanvas({
     history.current.push({
       lines: lines.map(l=>({ id:l.id, p1:{...l.p1}, p2:{...l.p2} })),
       circles: circles.map(c=>({ id:c.id, c:{...c.c}, r:c.r })),
-      paths: paths.map(ph=>({ start:{...ph.start}, segs: ph.segs.map(s => s.kind==='L'
-        ? { kind:'L', to:{...s.to} }
-        : { kind:'A', to:{...s.to}, r:s.r, largeArc:s.largeArc, sweep:s.sweep, c:{...s.c} }
-      )})),
+      paths: paths.map(ph=>({
+        start:{...ph.start},
+        segs: ph.segs.map(s => s.kind==='L'
+          ? { kind:'L', to:{...s.to} }
+          : { kind:'A', to:{...s.to}, r:s.r, largeArc:s.largeArc, sweep:s.sweep, c:{...s.c} }
+        ),
+        color: ph.color
+      })),
       userPoints: userPoints.map(p=>({...p}))
     });
   };
@@ -99,25 +108,23 @@ export default function GeometryCanvas({
     const c = ref.current;
     if (!c) return;
 
-    const DPR = window.devicePixelRatio || 1;
-    const scrW = c.width / DPR;
-    const scrH = c.height / DPR;
-
     // World coords of the current screen centre
-    // const xCenterWorld = offset.x + (scrW / scale) * 0.5;
     const xCenterWorld = 500;
-    const yCenterWorld = offset.y + (scrH / scale) * 0.5;
+    const yUpper = -100;
+    const yLower = 100;
 
     // Two vertices exactly 1 unit apart vertically (±0.5 around centre)
-    const pA = { x: xCenterWorld, y: yCenterWorld - 0.5 };
-    const pB = { x: xCenterWorld, y: yCenterWorld + 0.5 };
+    const pA = { x: xCenterWorld, y: yUpper };
+    const pB = { x: xCenterWorld, y: yLower };
 
     // Add the infinite vertical line (defined by pA–pB; math treats it as infinite)
     setLines(prev => [...prev, { id: 'seed-vertical', p1: pA, p2: pB }]);
 
     // Keep these two points as persistent vertices (for snapping & visibility)
     setUserPoints(prev => [...prev, pA, pB]);
-    
+
+    console.log("Creating vertical line:", { pA, pB });
+
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []); // run once on mount
 
@@ -164,7 +171,7 @@ export default function GeometryCanvas({
         for(const p of ps) vs.push(p);
       }
     }
-    // include retained arbitrary points
+    // retained arbitrary points
     for(const p of userPoints) vs.push(p);
 
     // dedupe
@@ -222,7 +229,7 @@ export default function GeometryCanvas({
       ctx.stroke();
     };
 
-    // draw analytic paths (approx to polyline for canvas fill)
+    // draw analytic paths (polyline approx for canvas fill)
     for(const path of paths){
       const poly = pathToPolyline(path, Math.PI/36);
       if(poly.length < 3) continue;
@@ -233,7 +240,7 @@ export default function GeometryCanvas({
         ctx.lineTo(si.x, si.y);
       }
       ctx.closePath();
-      ctx.fillStyle = (path as any).color || '#36a2ff';
+      ctx.fillStyle = path.color || '#36a2ff';
       ctx.globalAlpha = 0.55;
       ctx.fill();
       ctx.globalAlpha = 1;
@@ -278,6 +285,23 @@ export default function GeometryCanvas({
     return best;
   };
 
+  // helpers to dedupe/replace lines on the same infinite line
+  const approx = (a:number,b:number,eps=1e-9)=>Math.abs(a-b)<=eps;
+  const normalizedLine = (p1:Pt, p2:Pt) => {
+    const dx = p2.x - p1.x, dy = p2.y - p1.y;
+    const len = Math.hypot(dx,dy) || 1;
+    let nx = -dy/len, ny = dx/len;         // unit normal
+    // canonical orientation (avoid sign flips)
+    if (nx < 0 || (approx(nx,0) && ny < 0)) { nx = -nx; ny = -ny; }
+    const c = -(nx*p1.x + ny*p1.y);        // normalized offset
+    return { nx, ny, c };
+  };
+  const sameInfiniteLine = (A:Line, B:Line):boolean => {
+    const a = normalizedLine(A.p1, A.p2);
+    const b = normalizedLine(B.p1, B.p2);
+    return Math.abs(a.nx-b.nx) < 1e-6 && Math.abs(a.ny-b.ny) < 1e-6 && Math.abs(a.c-b.c) < 1e-4;
+  };
+
   const onPointerDown = (e:React.PointerEvent<HTMLCanvasElement>) => {
     const c = e.currentTarget;
     const rect = c.getBoundingClientRect();
@@ -297,9 +321,25 @@ export default function GeometryCanvas({
         setPendingWasSnap(!!snap);
         setMessage('Pick second point for line');
       } else {
-        pushHistory();
         const p1 = pendingPt, p2 = wp;
-        setLines(prev=>[...prev, { id: uuid(), p1, p2 }]);
+        pushHistory();
+        let replaced = false;
+        setLines(prev=>{
+          const candidate: Line = { id: uuid(), p1, p2 };
+          const idx = prev.findIndex(L => sameInfiniteLine(L, candidate));
+          if(idx !== -1){
+            const id = prev[idx].id;
+            const next = prev.slice();
+            next[idx] = { id, p1, p2 };     // replace existing line on this infinite line
+            // also remove any duplicates on the same infinite line (safety)
+            for(let j=next.length-1;j>=0;j--){
+              if(j!==idx && sameInfiniteLine(next[j], next[idx])) next.splice(j,1);
+            }
+            replaced = true;
+            return next;
+          }
+          return [...prev, candidate];
+        });
 
         const newPts: Pt[] = [];
         if(!pendingWasSnap) newPts.push(p1);
@@ -314,7 +354,7 @@ export default function GeometryCanvas({
 
         setPendingPt(null);
         setPendingWasSnap(false);
-        setMessage(bisections>0 ? `Line added (+${bisections} bisect vertex${bisections>1?'es':''})` : 'Line added');
+        setMessage(replaced ? 'Line replaced' : (bisections>0 ? `Line added (+${bisections} bisect vertex${bisections>1?'es':''})` : 'Line added'));
       }
       return;
     }
@@ -351,6 +391,24 @@ export default function GeometryCanvas({
     }
 
     if(tool==='fill'){
+      const worldPt = screenToWorld(sp);
+
+      // 1) If clicking an already-filled region, recolour it (override)
+      for(let i=paths.length-1;i>=0;i--){
+        const poly = pathToPolyline(paths[i]);
+        if(pointInPolyline(worldPt, poly)){
+          pushHistory();
+          setPaths(prev=>{
+            const next = prev.slice();
+            next[i] = { ...next[i], color: fillColor };
+            return next;
+          });
+          setMessage('Fill recoloured');
+          return;
+        }
+      }
+
+      // 2) Otherwise, trace arrangement and fill the smallest region under click
       const A = buildArrangement(
         lines.map(l=>({ p1:l.p1, p2:l.p2 })),
         circles.map(c=>({ c:c.c, r:c.r })),
@@ -359,7 +417,6 @@ export default function GeometryCanvas({
       const loops = traceFaces(A);
       if(!loops.length){ setMessage('No enclosed regions found'); return; }
 
-      const worldPt = screenToWorld(sp);
       const candidates = loops.map(loop => {
         const path = loopToPath(A, loop);
         const poly = pathToPolyline(path); // world coords
@@ -368,9 +425,9 @@ export default function GeometryCanvas({
 
       if(!candidates.length){ setMessage('Region not enclosed'); return; }
       candidates.sort((a,b)=>a.area - b.area);
+
       pushHistory();
-      const chosen = candidates[0].path as RegionPath;
-      (chosen as any).color = fillColor;
+      const chosen: RegionPath = { ...candidates[0].path, color: fillColor };
       setPaths(prev=>[...prev, chosen]);
       setMessage('Region filled');
       return;
@@ -431,18 +488,39 @@ export default function GeometryCanvas({
     if(isPanning){ setIsPanning(false); panStart.current = null; }
   };
 
-  const onWheel = (e:React.WheelEvent<HTMLCanvasElement>) => {
-    e.preventDefault();
-    const c = e.currentTarget;
-    const rect = c.getBoundingClientRect();
-    const sp = { x: e.clientX-rect.left, y: e.clientY-rect.top };
-    const before = screenToWorld(sp);
-    const factor = e.ctrlKey || e.metaKey ? 1.05 : 1.1;
-    const s = Math.max(0.1, Math.min(10, e.deltaY < 0 ? scale*factor : scale/factor ));
-    setScale(s);
-    const after = screenToWorld(sp);
-    setOffset({ x: offset.x + (before.x - after.x), y: offset.y + (before.y - after.y) });
-  };
+  // Native wheel listener with {passive:false} so preventDefault works.
+  useEffect(()=>{
+    const el = ref.current;
+    if(!el) return;
+
+    const handle = (e: WheelEvent) => {
+      e.preventDefault();
+      const rect = el.getBoundingClientRect();
+      const sp = { x: e.clientX - rect.left, y: e.clientY - rect.top };
+
+      // keep world point under cursor fixed:
+      const oldScale = scaleRef.current;
+      const oldOffset = offsetRef.current;
+      const worldUnderCursor = {
+        x: sp.x / oldScale + oldOffset.x,
+        y: sp.y / oldScale + oldOffset.y
+      };
+
+      const factor = e.ctrlKey || e.metaKey ? 1.05 : 1.1;
+      const newScale = Math.max(0.1, Math.min(10, e.deltaY < 0 ? oldScale*factor : oldScale/factor ));
+
+      const newOffset = {
+        x: worldUnderCursor.x - sp.x / newScale,
+        y: worldUnderCursor.y - sp.y / newScale
+      };
+
+      setScale(newScale);
+      setOffset(newOffset);
+    };
+
+    el.addEventListener('wheel', handle, { passive: false });
+    return ()=> el.removeEventListener('wheel', handle);
+  }, []);
 
   // export / clear / undo
   useEffect(()=>{
@@ -459,7 +537,7 @@ export default function GeometryCanvas({
       const esc = (s:string)=>s.replace(/&/g,'&amp;').replace(/"/g,'&quot;');
       let body = '';
       for(const ph of paths){
-        const color = (ph as any).color || '#36a2ff';
+        const color = ph.color || '#36a2ff';
         let d = `M ${ph.start.x.toFixed(2)} ${ph.start.y.toFixed(2)} `;
         for(const s of ph.segs){
           if(s.kind==='L'){
@@ -519,8 +597,7 @@ ${body}</svg>`;
           onPointerMove(e);
         }}
         onPointerUp={onPointerUp}
-        onWheel={onWheel}
-        style={{ display:'block', width:'100%', height:'70vh', touchAction:'none' }}
+        style={{ display:'block', width:'100%', height:'70vh', touchAction:'none', overscrollBehavior:'contain' }}
       />
     </div>
   );
