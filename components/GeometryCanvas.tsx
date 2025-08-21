@@ -12,7 +12,7 @@ import {
   type RegionPath
 } from '@/lib/arrangement';
 
-type Tool = 'line' | 'circle' | 'fill' | 'delete' | 'pan';
+type Tool = 'line' | 'circle' | 'fill' | 'delete';
 type Pt = { x:number, y:number };
 type Line = { id:string, p1:Pt, p2:Pt };
 type Circle = { id:string, c:Pt, r:number };
@@ -21,11 +21,12 @@ function uuid(){ return Math.random().toString(36).slice(2,10); }
 
 const SNAP_PX = 10;
 const HIT_PX = 8;
+const DRAG_THRESHOLD_PX2 = 9; // ~3px
 
 type Snapshot = {
   lines: Line[];
   circles: Circle[];
-  paths: RegionPath[];     // analytic fills
+  paths: RegionPath[];
   userPoints: Pt[];
 };
 
@@ -43,7 +44,7 @@ export default function GeometryCanvas({
   const ref = useRef<HTMLCanvasElement|null>(null);
 
   const [scale, setScale] = useState(1);
-  const [offset, setOffset] = useState<Pt>({ x: -400, y: -300 }); // world coords of top-left
+  const [offset, setOffset] = useState<Pt>({ x: -400, y: -300 });
   const scaleRef = useRef(scale);
   const offsetRef = useRef(offset);
   useEffect(()=>{ scaleRef.current = scale; }, [scale]);
@@ -54,9 +55,10 @@ export default function GeometryCanvas({
   const [paths, setPaths] = useState<RegionPath[]>([]);
 
   const [vertices, setVertices] = useState<Pt[]>([]);
-  const [userPoints, setUserPoints] = useState<Pt[]>([]); // retained arbitrary points
+  const [userPoints, setUserPoints] = useState<Pt[]>([]);
   const [pendingPt, setPendingPt] = useState<Pt|null>(null);
   const [pendingWasSnap, setPendingWasSnap] = useState<boolean>(false);
+
   const [isPanning, setIsPanning] = useState(false);
   const panStart = useRef<{x:number,y:number, o:Pt}|null>(null);
 
@@ -103,30 +105,33 @@ export default function GeometryCanvas({
     });
   };
 
-  // Seed a visible 1-unit vertical with two retained vertices on mount
+  // ---- Seed a visible 1-unit vertical with two retained vertices (runs once, even under StrictMode) ----
   useEffect(() => {
     const c = ref.current;
     if (!c) return;
 
-    // World coords of the current screen centre
-    const xCenterWorld = 500;
-    const yUpper = -100;
-    const yLower = 100;
+    let done = false;
+    queueMicrotask(() => {
+      if (done) return;
+      done = true;
 
-    // Two vertices exactly 1 unit apart vertically (±0.5 around centre)
-    const pA = { x: xCenterWorld, y: yUpper };
-    const pB = { x: xCenterWorld, y: yLower };
+      const xCenterWorld = 500;
+      const yUpper = -100;
+      const yLower = 100;
 
-    // Add the infinite vertical line (defined by pA–pB; math treats it as infinite)
-    setLines(prev => [...prev, { id: 'seed-vertical', p1: pA, p2: pB }]);
+      const pA = { x: xCenterWorld, y: yUpper };
+      const pB = { x: xCenterWorld, y: yLower };
 
-    // Keep these two points as persistent vertices (for snapping & visibility)
-    setUserPoints(prev => [...prev, pA, pB]);
+      setLines(prev => prev.some(l => l.id === 'seed-vertical') ? prev : [...prev, { id: 'seed-vertical', p1: pA, p2: pB }]);
 
-    console.log("Creating vertical line:", { pA, pB });
-
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []); // run once on mount
+      setUserPoints(prev => {
+        const out = [...prev];
+        const pushUnique = (pt: Pt) => { if (!out.some(q => dist2(q, pt) < 1e-10)) out.push(pt); };
+        pushUnique(pA); pushUnique(pB);
+        return out;
+      });
+    });
+  }, []);
 
   // resize
   useEffect(()=>{
@@ -229,7 +234,7 @@ export default function GeometryCanvas({
       ctx.stroke();
     };
 
-    // draw analytic paths (polyline approx for canvas fill)
+    // analytic fills
     for(const path of paths){
       const poly = pathToPolyline(path, Math.PI/36);
       if(poly.length < 3) continue;
@@ -249,11 +254,9 @@ export default function GeometryCanvas({
       ctx.stroke();
     }
 
-    // primitives
     for(const L of lines) drawLineInf(L);
     for(const Ci of circles) drawCircle(Ci);
 
-    // vertices
     for(const v of vertices){
       const s = worldToScreen(v);
       ctx.beginPath();
@@ -290,10 +293,9 @@ export default function GeometryCanvas({
   const normalizedLine = (p1:Pt, p2:Pt) => {
     const dx = p2.x - p1.x, dy = p2.y - p1.y;
     const len = Math.hypot(dx,dy) || 1;
-    let nx = -dy/len, ny = dx/len;         // unit normal
-    // canonical orientation (avoid sign flips)
+    let nx = -dy/len, ny = dx/len;
     if (nx < 0 || (approx(nx,0) && ny < 0)) { nx = -nx; ny = -ny; }
-    const c = -(nx*p1.x + ny*p1.y);        // normalized offset
+    const c = -(nx*p1.x + ny*p1.y);
     return { nx, ny, c };
   };
   const sameInfiniteLine = (A:Line, B:Line):boolean => {
@@ -302,18 +304,56 @@ export default function GeometryCanvas({
     return Math.abs(a.nx-b.nx) < 1e-6 && Math.abs(a.ny-b.ny) < 1e-6 && Math.abs(a.c-b.c) < 1e-4;
   };
 
+  // ---- Pointer handlers: pan on drag; do tool action ONLY on left mouse up (no drag) ----
+
   const onPointerDown = (e:React.PointerEvent<HTMLCanvasElement>) => {
-    const c = e.currentTarget;
-    const rect = c.getBoundingClientRect();
+    const rect = (e.currentTarget as HTMLCanvasElement).getBoundingClientRect();
     const sp = { x: e.clientX-rect.left, y: e.clientY-rect.top };
+
+    // capture for smooth pan; we'll decide later if it's a click or a drag
+    (e.currentTarget as HTMLCanvasElement).setPointerCapture(e.pointerId);
+    panStart.current = { x: sp.x, y: sp.y, o: { ...offset } };
+    setIsPanning(false);
+  };
+
+  const onPointerMove = (e:React.PointerEvent<HTMLCanvasElement>) => {
+    if (!panStart.current) return;
+    const rect = (e.currentTarget as HTMLCanvasElement).getBoundingClientRect();
+    const sp = { x: e.clientX-rect.left, y: e.clientY-rect.top };
+
+    if (!isPanning) {
+      const dx0 = sp.x - panStart.current.x;
+      const dy0 = sp.y - panStart.current.y;
+      if ((dx0*dx0 + dy0*dy0) > DRAG_THRESHOLD_PX2) setIsPanning(true);
+      else return;
+    }
+
+    // pan
+    const dx = (sp.x - panStart.current.x)/scale;
+    const dy = (sp.y - panStart.current.y)/scale;
+    setOffset({ x: panStart.current.o.x - dx, y: panStart.current.o.y - dy });
+  };
+
+  const onPointerUp = (e:React.PointerEvent<HTMLCanvasElement>) => {
+    const rect = (e.currentTarget as HTMLCanvasElement).getBoundingClientRect();
+    const sp = { x: e.clientX-rect.left, y: e.clientY-rect.top };
+
+    const isLeftClick = e.pointerType === 'mouse' ? e.button === 0 : true; // allow touch/pen
+    const wasDrag = isPanning;
+
+    // end pan state
+    setIsPanning(false);
+    panStart.current = null;
+
+    // Ignore non-left button actions
+    if (!isLeftClick) return;
+
+    // If it was a drag, do not treat as a click
+    if (wasDrag) return;
+
+    // ----- Handle tools on LEFT CLICK RELEASE -----
     const snap = pickVertex(sp);
     const wp = snap ?? screenToWorld(sp);
-
-    if(tool==='pan'){
-      setIsPanning(true);
-      (e.currentTarget as HTMLCanvasElement).setPointerCapture(e.pointerId);
-      return;
-    }
 
     if(tool==='line'){
       if(!pendingPt){
@@ -330,8 +370,7 @@ export default function GeometryCanvas({
           if(idx !== -1){
             const id = prev[idx].id;
             const next = prev.slice();
-            next[idx] = { id, p1, p2 };     // replace existing line on this infinite line
-            // also remove any duplicates on the same infinite line (safety)
+            next[idx] = { id, p1, p2 };
             for(let j=next.length-1;j>=0;j--){
               if(j!==idx && sameInfiniteLine(next[j], next[idx])) next.splice(j,1);
             }
@@ -393,7 +432,7 @@ export default function GeometryCanvas({
     if(tool==='fill'){
       const worldPt = screenToWorld(sp);
 
-      // 1) If clicking an already-filled region, recolour it (override)
+      // recolour existing fill if clicked inside
       for(let i=paths.length-1;i>=0;i--){
         const poly = pathToPolyline(paths[i]);
         if(pointInPolyline(worldPt, poly)){
@@ -408,7 +447,7 @@ export default function GeometryCanvas({
         }
       }
 
-      // 2) Otherwise, trace arrangement and fill the smallest region under click
+      // otherwise create a new fill
       const A = buildArrangement(
         lines.map(l=>({ p1:l.p1, p2:l.p2 })),
         circles.map(c=>({ c:c.c, r:c.r })),
@@ -419,7 +458,7 @@ export default function GeometryCanvas({
 
       const candidates = loops.map(loop => {
         const path = loopToPath(A, loop);
-        const poly = pathToPolyline(path); // world coords
+        const poly = pathToPolyline(path);
         return { path, poly, area: Math.abs(polylineArea(poly)) };
       }).filter(obj => pointInPolyline(worldPt, obj.poly) && obj.area > 1e-10);
 
@@ -435,7 +474,6 @@ export default function GeometryCanvas({
 
     if(tool==='delete'){
       const wp = screenToWorld(sp);
-      // filled paths (topmost last)
       for(let i=paths.length-1;i>=0;i--){
         const poly = pathToPolyline(paths[i]);
         if(pointInPolyline(wp, poly)){
@@ -445,7 +483,6 @@ export default function GeometryCanvas({
           return;
         }
       }
-      // circles
       for(let i=circles.length-1;i>=0;i--){
         const cs = worldToScreen(circles[i].c);
         const d = pointToCircleRingPx(sp, cs, circles[i].r*scale);
@@ -456,7 +493,6 @@ export default function GeometryCanvas({
           return;
         }
       }
-      // lines
       for(let i=lines.length-1;i>=0;i--){
         const p1s = worldToScreen(lines[i].p1);
         const p2s = worldToScreen(lines[i].p2);
@@ -472,23 +508,7 @@ export default function GeometryCanvas({
     }
   };
 
-  const onPointerMove = (e:React.PointerEvent<HTMLCanvasElement>) => {
-    if(!isPanning) return;
-    const c = e.currentTarget;
-    const rect = c.getBoundingClientRect();
-    const sp = { x: e.clientX-rect.left, y: e.clientY-rect.top };
-    if(panStart.current){
-      const dx = (sp.x - panStart.current.x)/scale;
-      const dy = (sp.y - panStart.current.y)/scale;
-      setOffset({ x: panStart.current.o.x - dx, y: panStart.current.o.y - dy });
-    }
-  };
-
-  const onPointerUp = () => {
-    if(isPanning){ setIsPanning(false); panStart.current = null; }
-  };
-
-  // Native wheel listener with {passive:false} so preventDefault works.
+  // Wheel zoom at cursor, with passive:false so preventDefault works
   useEffect(()=>{
     const el = ref.current;
     if(!el) return;
@@ -498,7 +518,6 @@ export default function GeometryCanvas({
       const rect = el.getBoundingClientRect();
       const sp = { x: e.clientX - rect.left, y: e.clientY - rect.top };
 
-      // keep world point under cursor fixed:
       const oldScale = scaleRef.current;
       const oldOffset = offsetRef.current;
       const worldUnderCursor = {
@@ -527,7 +546,6 @@ export default function GeometryCanvas({
     const onExport = ()=>{
       if(paths.length===0){ setMessage('Nothing to export'); return; }
 
-      // compute bbox from path polylines
       const allPts = paths.flatMap(ph => pathToPolyline(ph));
       const xs = allPts.map(p=>p.x), ys = allPts.map(p=>p.y);
       const minx = Math.min(...xs), miny = Math.min(...ys);
@@ -586,17 +604,9 @@ ${body}</svg>`;
       <canvas
         ref={ref}
         onPointerDown={onPointerDown}
-        onPointerMove={(e)=>{
-          if(isPanning){
-            const rect = e.currentTarget.getBoundingClientRect();
-            const sp = { x: e.clientX-rect.left, y: e.clientY-rect.top };
-            if(!panStart.current){
-              panStart.current = { x: sp.x, y: sp.y, o: { ...offset } };
-            }
-          }
-          onPointerMove(e);
-        }}
+        onPointerMove={onPointerMove}
         onPointerUp={onPointerUp}
+        onContextMenu={(e)=> e.preventDefault()}   // block right-click menu & actions
         style={{ display:'block', width:'100%', height:'70vh', touchAction:'none', overscrollBehavior:'contain' }}
       />
     </div>
