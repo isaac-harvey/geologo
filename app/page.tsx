@@ -4,7 +4,7 @@ import { useEffect, useState } from 'react';
 import '@/styles/globals.css';
 import GeometryCanvas from '@/components/GeometryCanvas';
 
-type Tool = 'line' | 'circle' | 'fill' | 'delete';
+type Tool = 'point' | 'line' | 'circle' | 'fill' | 'delete';
 
 export default function Page() {
   const [tool, setTool] = useState<Tool>('line');
@@ -23,6 +23,7 @@ export default function Page() {
 
       <div className="toolbar">
         <div className="group">
+          <button className={tool === 'point' ? 'active' : ''} onClick={() => setTool('point')}>Point</button>
           <button className={tool === 'line' ? 'active' : ''} onClick={() => setTool('line')}>Line</button>
           <button className={tool === 'circle' ? 'active' : ''} onClick={() => setTool('circle')}>Circle</button>
           <button className={tool === 'fill' ? 'active' : ''} onClick={() => setTool('fill')}>Fill</button>
@@ -83,7 +84,7 @@ export default function Page() {
       />
 
       <p className="status">
-        Tip: Drag to pan. Scroll to zoom (hold Ctrl/⌘ for finer steps). Click near a cyan dot to snap; otherwise a free point is used.
+        Tip: Drag to pan. Scroll to zoom (hold Ctrl/⌘ for finer steps).
       </p>
     </div>
   );
