@@ -11,7 +11,7 @@ export default function Page() {
   const [color, setColor] = useState<string>('#36a2ff');
   const [hex, setHex] = useState<string>('#36a2ff');
   const [message, setMessage] = useState<string>('Ready');
-  const [bisections, setBisections] = useState<number>(0);
+  const [partitions, setPartitions] = useState<number>(1);
 
   const fileRef = useRef<HTMLInputElement>(null);
 
@@ -41,13 +41,12 @@ export default function Page() {
       }
     };
     reader.readAsText(f);
-    // allow re-selecting the same file later
     e.target.value = '';
   };
 
   return (
     <div style={{ padding: 16, display: 'grid', gap: 12 }}>
-      <h1 style={{ margin: 0, fontWeight: 600, letterSpacing: 0.3 }}>GeoLogo - Euclidean Construction Design Tools</h1>
+      <h1 style={{ margin: 0, fontWeight: 600, letterSpacing: 0.3 }}>GeoLogo - Euclidean Construction Design</h1>
 
       <div className="toolbar">
         <div className="group">
@@ -60,15 +59,15 @@ export default function Page() {
 
         <div className="group">
           <label style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-            <span className="status">Bisections</span>
+            <span className="status">Partitions</span>
             <input
-              aria-label="bisections"
+              aria-label="partitions"
               type="number"
-              min={0}
-              max={12}
+              min={1}
+              max={60}
               step={1}
-              value={bisections}
-              onChange={(e) => setBisections(Math.max(0, Math.min(12, Number(e.target.value) || 0)))}
+              value={partitions}
+              onChange={(e) => setPartitions(Math.max(1, Math.min(60, Number(e.target.value) || 0)))}
               className="hex"
               style={{ width: 80 }}
             />
@@ -110,7 +109,7 @@ export default function Page() {
         tool={tool}
         setMessage={setMessage}
         fillColor={color}
-        bisections={bisections}
+        partitions={partitions}
       />
 
       {/* Hidden file input for JSON load */}
