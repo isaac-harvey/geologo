@@ -1,6 +1,6 @@
 export const metadata = {
-  title: "Geometric Tools Canvas",
-  description: "Straightedge & compass drawing with fill and SVG export",
+  title: "GeoLogo",
+  description: "Tools for creating Euclidean geometric constructions to export to SVG. Ideal for geometric logos.",
 };
 
 export default function RootLayout({ children }: { children: React.ReactNode }) {
