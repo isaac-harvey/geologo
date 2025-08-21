@@ -19,7 +19,7 @@ export default function Page() {
 
   return (
     <div style={{ padding: 16, display: 'grid', gap: 12 }}>
-      <h1 style={{ margin: 0, fontWeight: 600, letterSpacing: 0.3 }}>Geometric Tools Canvas</h1>
+      <h1 style={{ margin: 0, fontWeight: 600, letterSpacing: 0.3 }}>GeoLogo</h1>
 
       <div className="toolbar">
         <div className="group">
@@ -83,8 +83,17 @@ export default function Page() {
         bisections={bisections}
       />
 
-      <p className="status">
-        Tip: Drag to pan. Scroll to zoom (hold Ctrl/⌘ for finer steps).
+      <p className="status" style={{ margin: '4px 0' }}>
+        Tip: Drag to pan. Scroll to zoom (hold Ctrl/⌘ for finer steps). 
+      </p>
+      <p className="status" style={{ margin: '4px 0' }}>
+        <span style={{ color: 'magenta' }}>●</span> Fixed Point - Created with the Point tool, only removed if explicitly deleted.
+      </p>
+      <p className="status" style={{ margin: '4px 0' }}>
+        <span style={{ color: 'orange' }}>●</span> Construction Point - Created with the Line/Circle tool, deleted if the corresponding line is deleted.
+      </p>
+      <p className="status" style={{ margin: '4px 0' }}>
+        <span style={{ color: 'cyan' }}>●</span> Intersection Point - Created by intersection, deleted if the intersection is removed.
       </p>
     </div>
   );
