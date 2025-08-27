@@ -705,39 +705,65 @@ export default function GeometryCanvas({
       }
     };
 
-    const onExport = ()=>{
-      if(paths.length===0){ setMessage('Nothing to export'); return; }
-      const allPts = paths.flatMap(ph => pathToPolyline(ph));
-      const xs = allPts.map(p=>p.x), ys = allPts.map(p=>p.y);
+    const onExport = () => {
+      if (paths.length === 0) { setMessage('Nothing to export'); return; }
+
+      const ANGLE_STEP = Math.PI / 180; // 1°; increase for smoother curves, decrease for smaller files
+      const EPS2 = 1e-12;
+
+      const fmt = (n: number) => Number.isFinite(n) ? n.toFixed(6) : '0';
+      const esc = (s: string) => s.replace(/&/g, '&amp;').replace(/"/g, '&quot;');
+
+      // Build polylines exactly as the canvas renders
+      const polys = paths.map(ph => {
+        const raw = pathToPolyline(ph, ANGLE_STEP);
+        // dedupe consecutive points
+        const poly: {x:number; y:number}[] = [];
+        for (const p of raw) {
+          const last = poly[poly.length - 1];
+          if (!last || ((p.x - last.x) ** 2 + (p.y - last.y) ** 2) > EPS2) {
+            poly.push({ x: p.x, y: p.y });
+          }
+        }
+        return { poly, color: ph.color || '#36a2ff' };
+      });
+
+      // Bounds
+      const all = polys.flatMap(o => o.poly);
+      if (all.length < 3) { setMessage('Nothing to export'); return; }
+      const xs = all.map(p => p.x), ys = all.map(p => p.y);
       const minx = Math.min(...xs), miny = Math.min(...ys);
       const maxx = Math.max(...xs), maxy = Math.max(...ys);
-      const width = Math.max(1, maxx-minx), height = Math.max(1, maxy-miny);
-      const esc = (s:string)=>s.replace(/&/g,'&amp;').replace(/"/g,'&quot;');
+      const width = Math.max(1e-6, maxx - minx);
+      const height = Math.max(1e-6, maxy - miny);
+
+      // Body: M + L ... Z
       let body = '';
-      for(const ph of paths){
-        const color = ph.color || '#36a2ff';
-        let d = `M ${ph.start.x.toFixed(2)} ${ph.start.y.toFixed(2)} `;
-        for(const s of ph.segs){
-          if(s.kind==='L'){
-            d += `L ${s.to.x.toFixed(2)} ${s.to.y.toFixed(2)} `;
-          } else {
-            d += `A ${s.r.toFixed(4)} ${s.r.toFixed(4)} 0 ${s.largeArc} ${s.sweep} ${s.to.x.toFixed(2)} ${s.to.y.toFixed(2)} `;
-          }
+      for (const { poly, color } of polys) {
+        if (poly.length < 3) continue;
+        let d = `M ${fmt(poly[0].x)} ${fmt(poly[0].y)} `;
+        for (let i = 1; i < poly.length; i++) {
+          d += `L ${fmt(poly[i].x)} ${fmt(poly[i].y)} `;
         }
         d += 'Z';
         body += `<path d="${esc(d)}" fill="${esc(color)}" />\n`;
       }
-      const svg = `<?xml version="1.0" encoding="UTF-8"?>
-<svg xmlns="http://www.w3.org/2000/svg" width="${width.toFixed(2)}" height="${height.toFixed(2)}" viewBox="${minx.toFixed(2)} ${miny.toFixed(2)} ${width.toFixed(2)} ${height.toFixed(2)}">
-${body}</svg>`;
+
+      const svg =
+        `<?xml version="1.0" encoding="UTF-8"?>\n` +
+        `<svg xmlns="http://www.w3.org/2000/svg" width="${fmt(width)}" height="${fmt(height)}" viewBox="${fmt(minx)} ${fmt(miny)} ${fmt(width)} ${fmt(height)}">\n` +
+        `${body}</svg>`;
+
       const blob = new Blob([svg], { type: 'image/svg+xml' });
       const url = URL.createObjectURL(blob);
       const a = document.createElement('a');
       a.href = url;
-      a.download = 'filled-regions.svg';
+      a.download = `geologo_export_${Date.now()}.svg`; // <- correct template literal
       a.click();
       URL.revokeObjectURL(url);
+      setMessage('Exported SVG');
     };
+
 
     const onClear = ()=>{
       if(lines.length||circles.length||paths.length||userPoints.length) pushHistory();
